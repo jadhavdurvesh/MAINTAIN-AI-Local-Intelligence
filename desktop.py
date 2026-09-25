@@ -59,7 +59,7 @@ class App(tk.Tk):
         style.map("Treeview", background=[("selected", "#183c37")], foreground=[("selected", "#ffffff")])
         style.configure("Horizontal.TProgressbar", troughcolor="#16212b", background=ACCENT, bordercolor=BORDER, lightcolor=ACCENT, darkcolor=ACCENT)
 
-    def _label(self, parent, text, size=10, color=TEXT, weight="normal", **kwargs):
+    def _label(self, parent, text=None, size=10, color=TEXT, weight="normal", **kwargs):
         return tk.Label(parent, text=text, bg=parent.cget("bg"), fg=color, font=("Segoe UI", size, weight), **kwargs)
 
     def _build(self):
@@ -74,7 +74,7 @@ class App(tk.Tk):
         status_box.pack(side="right", ipadx=14, ipady=9)
         self.status_label = self._label(status_box, "●  Starting", 11, ACCENT, "bold")
         self.status_label.pack(anchor="e")
-        self._label(status_box, textvariable=self.detail, 9, MUTED).pack(anchor="e", pady=(2, 0))
+        self._label(status_box, None, 9, MUTED, textvariable=self.detail).pack(anchor="e", pady=(2, 0))
 
         # Toolbar
         toolbar = tk.Frame(self, bg=BG)
@@ -278,142 +278,114 @@ class App(tk.Tk):
         downloadable = [m for m in models if m.get("downloadable") and not m.get("installed")]
         built_in = [m for m in models if not m.get("downloadable")]
         if not downloadable:
-            messagebox.showinfo("Model Library", "The selected model is already available locally or is built in; no download is needed.")
+            messagebox.showinfo("Model Library", "The selected model(s) are already installed or built-in.")
+            return
+        if built_in:
+            downloadable_names = ", ".join(m.get("name", "model") for m in downloadable)
+        else:
+            downloadable_names = ", ".join(m.get("name", "model") for m in downloadable)
+        if not messagebox.askyesno("Install Models", f"Download and install these local models?\n\n{downloadable_names}"):
+            return
+        self._run_download_queue(downloadable)
+
+    def _run_download_queue(self, models):
+        if self._busy:
             return
         self._busy = True
         self.refresh_button_state()
-        self._download_queue = [m["name"] for m in downloadable]
-        self.progress.start(10)
-        self._download_next()
+        self.progress.start(12)
+        self._download_queue = list(models)
+        threading.Thread(target=self._download_worker, daemon=True, name="maintain-ai-model-download").start()
 
-    def download_all(self):
-        downloadable = [m for m in self.models if m.get("downloadable") and not m.get("installed")]
-        if not downloadable:
-            messagebox.showinfo("Model Library", "All downloadable models are already installed. Built-in models require no download.")
-            return
-        self._busy = True
+    def _download_worker(self):
+        failures = []
+        total = len(self._download_queue)
+        for index, model in enumerate(self._download_queue, start=1):
+            name = model.get("name", "model")
+            self.after(0, lambda n=name, i=index: self.progress_text.set(f"Installing {n}…  ({i}/{total})"))
+            try:
+                self._post(f"http://{HOST}:{PORT}/api/model-manager/{name}/download")
+            except Exception as exc:
+                failures.append(f"{name}: {type(exc).__name__}: {exc}")
+        self.after(0, lambda: self._download_finished(failures))
+
+    def _download_finished(self, failures):
+        self.progress.stop()
+        self._busy = False
+        if failures:
+            self.progress_text.set("Model installation finished with errors")
+            messagebox.showerror("Model Installation", "Some models could not be installed:\n\n" + "\n".join(failures))
+        else:
+            self.progress_text.set("Model installation complete")
+            messagebox.showinfo("Model Installation", "Selected models are now installed locally.")
+        self.refresh()
         self.refresh_button_state()
-        self._download_queue = [m["name"] for m in downloadable]
-        self.progress.start(10)
-        self._download_next()
-
-    def _download_next(self):
-        if not self._download_queue:
-            self.progress.stop()
-            self.progress_text.set("All requested downloads complete")
-            self._busy = False
-            self.refresh()
-            self.refresh_button_state()
-            return
-        name = self._download_queue.pop(0)
-        try:
-            job = self._post(f"http://{HOST}:{PORT}/api/model-manager/{name}/download")
-            job_id = job.get("job_id")
-            self.progress_text.set(f"Downloading {name}…")
-            self._poll_job(job_id, name)
-        except Exception as exc:
-            self._busy = False
-            self.progress.stop()
-            self.progress_text.set("Download failed")
-            self.refresh_button_state()
-            messagebox.showerror("Model Download", f"{name}\n\n{exc}")
-
-    def _poll_job(self, job_id, name):
-        if not job_id:
-            self._download_next()
-            return
-        try:
-            with urlopen(f"http://{HOST}:{PORT}/api/model-manager/jobs/{job_id}", timeout=5) as r:
-                job = json.load(r)
-            state = job.get("state")
-            self.detail.set(f"{name}: {job.get('message', 'working…')}")
-            if state in {"queued", "running"}:
-                self.progress_text.set(f"Downloading {name}… {job.get('message', 'working')}")
-                self.after(700, lambda: self._poll_job(job_id, name))
-                return
-            if state == "done":
-                self.progress_text.set(f"{name} installed")
-                self.refresh()
-                self.after(250, self._download_next)
-                return
-            self._busy = False
-            self.progress.stop()
-            self.progress_text.set(f"{name} download failed")
-            self.refresh_button_state()
-            messagebox.showerror("Model Download", f"{name} failed:\n\n{job.get('message', 'Unknown error')}")
-        except Exception as exc:
-            self._busy = False
-            self.progress.stop()
-            self.progress_text.set("Download status unavailable")
-            self.refresh_button_state()
-            messagebox.showerror("Model Download", str(exc))
 
     def delete_selected(self):
         models = self._selected_models()
-        if not models:
-            messagebox.showinfo("Model Library", "Select a model row first.")
-            return
         downloadable = [m for m in models if m.get("downloadable") and m.get("installed")]
         if not downloadable:
-            messagebox.showinfo("Model Library", "Built-in models cannot be removed, and no selected downloadable model is installed.")
+            messagebox.showinfo("Model Library", "Select an installed downloadable model to remove.")
             return
-        names = ", ".join(m["name"] for m in downloadable)
-        if not messagebox.askyesno("Remove local models", f"Remove these local model files?\n\n{names}\n\nThis only deletes the copy on this computer."):
+        names = ", ".join(m.get("name", "model") for m in downloadable)
+        if not messagebox.askyesno("Remove Models", f"Remove these downloaded model files from this computer?\n\n{names}"):
             return
-        errors = []
+        failures = []
         for model in downloadable:
+            name = model.get("name")
             try:
-                self._delete(f"http://{HOST}:{PORT}/api/model-manager/{model['name']}")
+                request = Request(f"http://{HOST}:{PORT}/api/model-manager/{name}", method="DELETE")
+                with urlopen(request, timeout=10) as r:
+                    json.load(r)
             except Exception as exc:
-                errors.append(f"{model['name']}: {exc}")
+                failures.append(f"{name}: {type(exc).__name__}: {exc}")
+        if failures:
+            messagebox.showerror("Remove Models", "Some models could not be removed:\n\n" + "\n".join(failures))
+        else:
+            self.progress_text.set("Selected model files removed")
         self.refresh()
-        self.progress_text.set("Selected local models removed" if not errors else "Some removals failed")
-        if errors:
-            messagebox.showerror("Remove Models", "\n".join(errors))
 
-    def _delete(self, url):
-        request = Request(url, method="DELETE")
-        with urlopen(request, timeout=10) as r:
-            return json.load(r)
+    def download_all(self):
+        models = [m for m in self.models if m.get("downloadable") and not m.get("installed")]
+        if not models:
+            messagebox.showinfo("Model Library", "There are no missing downloadable models.")
+            return
+        if not messagebox.askyesno("Download All", f"Download {len(models)} missing model(s) to local storage?"):
+            return
+        self._run_download_queue(models)
+
+    def open_docs(self):
+        webbrowser.open(f"http://{HOST}:{PORT}/docs")
+
+    def _open_path(self, path):
+        os.makedirs(path, exist_ok=True)
+        if os.name == "nt":
+            os.startfile(path)
+        else:
+            webbrowser.open(f"file://{path}")
+
+    def open_data_folder(self):
+        self._open_path(os.path.expanduser("~/.maintain-ai"))
+
+    def open_models_folder(self):
+        self._open_path(os.path.expanduser("~/.maintain-ai/models"))
 
     def diagnostics(self):
-        if not (self.engine and self.engine.is_alive()):
-            messagebox.showinfo("MAINTAIN AI Diagnostics", "Local engine is stopped.\n\nStart the engine first, then run Diagnostics again.")
-            return
-        checks = [f"API port {HOST}:{PORT}: listening"]
+        checks = []
         try:
             with urlopen(f"http://{HOST}:{PORT}/api/health", timeout=2) as r:
-                checks.append(f"Health endpoint: HTTP {r.status}")
+                checks.append(f"API health: HTTP {r.status}")
         except Exception as exc:
-            checks.append(f"Health endpoint: FAILED ({type(exc).__name__}: {exc})")
+            checks.append(f"API health: FAILED ({type(exc).__name__}: {exc})")
         try:
             with urlopen(f"http://{HOST}:{PORT}/api/model-manager", timeout=3) as r:
                 data = json.load(r)
-            models = data.get("models", [])
-            ready = sum(1 for m in models if m.get("installed"))
-            checks.append(f"Model manager: OK ({ready}/{len(models)} ready)")
-            for m in models:
-                checks.append(f"  • {m['name']}: {'ready' if m.get('installed') else 'not installed'}")
+            checks.append(f"Model manager: OK ({len(data.get('models', []))} models)")
         except Exception as exc:
             checks.append(f"Model manager: FAILED ({type(exc).__name__}: {exc})")
+        checks.append(f"Engine thread: {'running' if self.engine and self.engine.is_alive() else 'stopped'}")
+        checks.append(f"Data directory: {os.path.expanduser('~/.maintain-ai')}")
         messagebox.showinfo("MAINTAIN AI Diagnostics", "\n".join(checks))
-
-    def open_docs(self):
-        if not (self.engine and self.engine.is_alive()):
-            self.start()
-            self.after(1800, self.open_docs)
-            return
-        webbrowser.open(f"http://{HOST}:{PORT}/docs")
-
-    def open_data_folder(self):
-        folder = os.path.join(os.path.expanduser("~"), ".maintain-ai")
-        os.makedirs(folder, exist_ok=True)
-        os.startfile(folder)
-
-    def open_models_folder(self):
-        folder = os.path.join(os.path.expanduser("~"), ".maintain-ai", "models")
-        os.makedirs(folder, exist_ok=True)
-        os.startfile(folder)
 
     def on_close(self):
         if self.engine:
