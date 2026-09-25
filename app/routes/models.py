@@ -3,7 +3,7 @@ from fastapi import APIRouter
 from app.models.adapters import _MODEL_CACHE, timer_status, timeradar_status
 from app.models.registry import registry
 
-router = APIRouter(prefix="/models", tags=["models"])
+router = APIRouter(prefix="/model-manager", tags=["model management"])
 
 
 @router.get("")
