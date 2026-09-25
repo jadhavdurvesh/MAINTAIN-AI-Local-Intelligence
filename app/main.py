@@ -18,7 +18,7 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="MAINTAIN AI Local Intelligence",
-    version="0.6.0",
+    version="0.6.2",
     lifespan=lifespan,
 )
 app.include_router(health_router, prefix="/api")
@@ -32,6 +32,7 @@ app.include_router(models_router, prefix="/api")
 def root():
     return {
         "name": "MAINTAIN AI Local Intelligence",
+        "version": "0.6.2",
         "status": "running",
         "docs": "/docs",
         "api": "/api/health",
