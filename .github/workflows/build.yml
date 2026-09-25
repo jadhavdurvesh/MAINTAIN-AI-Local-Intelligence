@@ -24,6 +24,8 @@ jobs:
           pip install -r requirements.txt
       - name: Run tests
         run: python -m pytest -q
+      - name: Verify desktop entrypoint imports
+        run: python -c "import desktop; from app.main import app; print('Desktop/API import OK')"
 
   build:
     needs: test
@@ -40,14 +42,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
+      - name: Verify packaging inputs
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "desktop.py")) { throw "desktop.py is missing from repository root." }
+          if (-not (Test-Path "packaging\maintain_ai_local.spec")) { throw "PyInstaller spec is missing." }
+          if (-not (Test-Path "packaging\installer.iss")) { throw "Inno Setup script is missing." }
       - name: Build executable
-        run: pyinstaller packaging/maintain_ai_local.spec --noconfirm --clean
+        run: pyinstaller packaging/maintain_ai_local.spec --noconfirm --clean --log-level WARN
       - name: Verify executable exists
         shell: pwsh
         run: |
           if (-not (Test-Path "dist\MAINTAIN-AI-Local-Intelligence.exe")) {
             throw "PyInstaller did not produce the expected executable."
           }
+      - name: Smoke test packaged executable
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "dist\MAINTAIN-AI-Local-Intelligence.exe" -PassThru
+          Start-Sleep -Seconds 5
+          if ($proc.HasExited) {
+            throw "Packaged desktop application exited during startup. ExitCode=$($proc.ExitCode)"
+          }
+          Stop-Process -Id $proc.Id -Force
       - name: Build installer with Inno Setup
         shell: pwsh
         run: |
@@ -66,9 +83,11 @@ jobs:
           name: maintain-ai-local-intelligence-executable
           path: dist/MAINTAIN-AI-Local-Intelligence.exe
           if-no-files-found: error
+          retention-days: 14
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
           name: maintain-ai-local-intelligence-installer
           path: dist/installer/MAINTAIN-AI-Local-Intelligence-Setup.exe
           if-no-files-found: error
+          retention-days: 14
