@@ -53,7 +53,8 @@ jobs:
           if (-not (Test-Path "packaging\maintain_ai_local.spec")) { throw "PyInstaller spec is missing." }
           if (-not (Test-Path "packaging\installer.iss")) { throw "Inno Setup script is missing." }
 
-      - name: Verify SignPath configuration
+      - name: Detect SignPath configuration
+        id: signpath-config
         shell: pwsh
         env:
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -74,8 +75,15 @@ jobs:
             "SIGNPATH_INSTALLER_ARTIFACT_CONFIG_SLUG" = $env:SIGNPATH_INSTALLER_ARTIFACT_CONFIG_SLUG
           }
           $missing = @($required.GetEnumerator() | Where-Object { [string]::IsNullOrWhiteSpace($_.Value) } | ForEach-Object { $_.Key })
-          if ($missing.Count -gt 0) {
-            throw "SignPath is not configured. Add repository secret SIGNPATH_API_TOKEN and repository variables: $($missing -join ', '). See docs/SIGNING.md."
+          if ($missing.Count -eq 0) {
+            "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Host "SignPath signing is configured."
+          } else {
+            "enabled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+            Write-Warning "SignPath is not configured. The build will continue unsigned for development/testing. Missing: $($missing -join ', ')"
+            if ($env:GITHUB_REF -like 'refs/tags/*') {
+              throw "Release tags require SignPath signing. Configure docs/SIGNING.md before creating a release tag."
+            }
           }
 
       - name: Build executable
@@ -88,10 +96,8 @@ jobs:
             throw "PyInstaller did not produce the expected executable."
           }
 
-      # The application executable is signed before it is placed in the installer.
-      # This is important because signing only the outer installer does not make the
-      # installed application itself a trusted Authenticode binary.
-      - name: Upload unsigned application for signing
+      - name: Upload unsigned application for SignPath
+        if: steps.signpath-config.outputs.enabled == 'true'
         id: upload-app-for-signing
         uses: actions/upload-artifact@v4
         with:
@@ -101,6 +107,7 @@ jobs:
           retention-days: 1
 
       - name: Submit application signing request
+        if: steps.signpath-config.outputs.enabled == 'true'
         id: sign-app
         uses: signpath/github-action-submit-signing-request@v3
         with:
@@ -114,6 +121,7 @@ jobs:
           output-artifact-directory: dist/signed-app
 
       - name: Replace executable with signed executable
+        if: steps.signpath-config.outputs.enabled == 'true'
         shell: pwsh
         run: |
           $signed = Get-ChildItem -Path "dist\signed-app" -Filter "MAINTAIN-AI-Local-Intelligence.exe" -Recurse | Select-Object -First 1
@@ -123,13 +131,13 @@ jobs:
           if ($sig.Status -ne "Valid") { throw "Signed application Authenticode status is '$($sig.Status)', expected Valid." }
           Write-Host "Signed application certificate: $($sig.SignerCertificate.Subject)"
 
-      - name: Smoke test signed executable
+      - name: Smoke test packaged executable
         shell: pwsh
         run: |
           $proc = Start-Process -FilePath "dist\MAINTAIN-AI-Local-Intelligence.exe" -PassThru
           Start-Sleep -Seconds 5
           if ($proc.HasExited) {
-            throw "Signed desktop application exited during startup. ExitCode=$($proc.ExitCode)"
+            throw "Packaged desktop application exited during startup. ExitCode=$($proc.ExitCode)"
           }
           Stop-Process -Id $proc.Id -Force
 
@@ -147,7 +155,8 @@ jobs:
             throw "Inno Setup did not produce the expected installer."
           }
 
-      - name: Upload unsigned installer for signing
+      - name: Upload unsigned installer for SignPath
+        if: steps.signpath-config.outputs.enabled == 'true'
         id: upload-installer-for-signing
         uses: actions/upload-artifact@v4
         with:
@@ -157,6 +166,7 @@ jobs:
           retention-days: 1
 
       - name: Submit installer signing request
+        if: steps.signpath-config.outputs.enabled == 'true'
         id: sign-installer
         uses: signpath/github-action-submit-signing-request@v3
         with:
@@ -170,6 +180,7 @@ jobs:
           output-artifact-directory: dist/signed-installer
 
       - name: Replace installer with signed installer
+        if: steps.signpath-config.outputs.enabled == 'true'
         shell: pwsh
         run: |
           $signed = Get-ChildItem -Path "dist\signed-installer" -Filter "MAINTAIN-AI-Local-Intelligence-Setup.exe" -Recurse | Select-Object -First 1
@@ -193,18 +204,18 @@ jobs:
           $lines | Set-Content "dist\SHA256SUMS.txt" -Encoding utf8
           Get-Content "dist\SHA256SUMS.txt"
 
-      - name: Upload signed Windows executable
+      - name: Upload Windows executable
         uses: actions/upload-artifact@v4
         with:
-          name: maintain-ai-local-intelligence-executable-signed
+          name: maintain-ai-local-intelligence-executable${{ steps.signpath-config.outputs.enabled == 'true' && '-signed' || '-unsigned' }}
           path: dist/MAINTAIN-AI-Local-Intelligence.exe
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload signed Windows installer
+      - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
-          name: maintain-ai-local-intelligence-installer-signed
+          name: maintain-ai-local-intelligence-installer${{ steps.signpath-config.outputs.enabled == 'true' && '-signed' || '-unsigned' }}
           path: dist/installer/MAINTAIN-AI-Local-Intelligence-Setup.exe
           if-no-files-found: error
           retention-days: 14
