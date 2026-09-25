@@ -1,10 +1,14 @@
 from PyInstaller.utils.hooks import collect_submodules
 
+# The spec file lives in packaging/, while the desktop entrypoint lives at
+# the repository root. PyInstaller resolves Analysis paths relative to the
+# spec file, so use the parent directory explicitly.
+APP_ROOT = ".."
 hidden = collect_submodules("app")
 
 a = Analysis(
-    ["desktop.py"],
-    pathex=["."],
+    ["../desktop.py"],
+    pathex=[APP_ROOT],
     binaries=[],
     datas=[],
     hiddenimports=hidden,
