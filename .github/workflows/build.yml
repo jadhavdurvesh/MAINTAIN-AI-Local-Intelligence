@@ -5,48 +5,70 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
       - name: Install runtime and test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Run tests
-        run: python -m pytest
+        run: python -m pytest -q
 
   build:
     needs: test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
       - name: Install build dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
       - name: Build executable
-        run: pyinstaller packaging/maintain_ai_local.spec --noconfirm
+        run: pyinstaller packaging/maintain_ai_local.spec --noconfirm --clean
+      - name: Verify executable exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\MAINTAIN-AI-Local-Intelligence.exe")) {
+            throw "PyInstaller did not produce the expected executable."
+          }
       - name: Build installer with Inno Setup
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist\installer | Out-Null
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify installer exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist\installer\MAINTAIN-AI-Local-Intelligence-Setup.exe")) {
+            throw "Inno Setup did not produce the expected installer."
+          }
       - name: Upload Windows executable
         uses: actions/upload-artifact@v4
         with:
           name: maintain-ai-local-intelligence-executable
           path: dist/MAINTAIN-AI-Local-Intelligence.exe
+          if-no-files-found: error
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
           name: maintain-ai-local-intelligence-installer
           path: dist/installer/MAINTAIN-AI-Local-Intelligence-Setup.exe
+          if-no-files-found: error
