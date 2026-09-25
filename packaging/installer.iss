@@ -1,5 +1,5 @@
 #define MyAppName "MAINTAIN AI Local Intelligence"
-#define MyAppVersion "0.6.1"
+#define MyAppVersion "0.6.2"
 #define MyAppPublisher "MAINTAIN AI"
 #define MyAppExeName "MAINTAIN-AI-Local-Intelligence.exe"
 
