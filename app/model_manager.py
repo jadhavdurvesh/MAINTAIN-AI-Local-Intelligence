@@ -20,10 +20,10 @@ MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 MODEL_SPECS: dict[str, dict[str, Any]] = {
     "TimeRadar": {"kind": "zero_shot_anomaly", "folder": "TimeRadar", "source": "github", "source_label": "mala-lab/TimeRadar", "url": "https://github.com/mala-lab/TimeRadar/archive/refs/heads/main.zip", "description": "Zero-shot time-series anomaly detection; sequence length 100.", "dependencies": "torch, transformers, torch-frft, safetensors"},
-    "Chronos-2": {"kind": "forecast", "folder": "Chronos-2", "source": "huggingface", "repo": "amazon/chronos-2", "description": "Chronos-2 time-series forecasting foundation model.", "dependencies": "torch, chronos-forecasting"},
-    "Timer": {"kind": "forecast", "folder": "Timer", "source": "huggingface", "repo": "thuml/timer-base-84m", "description": "Timer foundation model for time-series forecasting.", "dependencies": "torch, transformers"},
-    "Random Forest baseline": {"kind": "baseline", "folder": "built-in", "source": "built-in", "description": "Lightweight local baseline using scikit-learn/statistics.", "dependencies": "scikit-learn"},
-    "Online anomaly": {"kind": "online", "folder": "built-in", "source": "built-in", "description": "Lightweight streaming anomaly statistics adapter.", "dependencies": "numpy"},
+    "Chronos-2": {"kind": "forecast", "folder": "Chronos-2", "source": "huggingface", "source_label": "amazon/chronos-2", "repo": "amazon/chronos-2", "description": "Chronos-2 time-series forecasting foundation model.", "dependencies": "torch, chronos-forecasting"},
+    "Timer": {"kind": "forecast", "folder": "Timer", "source": "huggingface", "source_label": "thuml/timer-base-84m", "repo": "thuml/timer-base-84m", "description": "Timer foundation model for time-series forecasting.", "dependencies": "torch, transformers"},
+    "Random Forest baseline": {"kind": "baseline", "folder": "built-in", "source": "built-in", "source_label": "Built in", "description": "Lightweight local baseline using scikit-learn/statistics.", "dependencies": "scikit-learn"},
+    "Online anomaly": {"kind": "online", "folder": "built-in", "source": "built-in", "source_label": "Built in", "description": "Lightweight streaming anomaly statistics adapter.", "dependencies": "numpy"},
 }
 
 _JOBS: dict[str, dict[str, Any]] = {}
@@ -47,8 +47,8 @@ def _status(name: str) -> dict[str, Any]:
     spec = MODEL_SPECS[name]
     path = model_path(name)
     installed = spec["source"] == "built-in" or path.exists()
-    size = _folder_size(path) if installed else 0
-    return {"name": name, "kind": spec["kind"], "installed": installed, "available": installed, "path": str(path), "size_bytes": size, "size_mb": round(size / (1024 * 1024), 1), "source": spec["source"], "source_label": spec.get("source_label") or spec.get("repo") or "Built in", "description": spec["description"], "dependencies": spec["dependencies"], "downloadable": spec["source"] != "built-in"}
+    size = _folder_size(path) if installed and spec["source"] != "built-in" else 0
+    return {"name": name, "kind": spec["kind"], "installed": installed, "available": installed, "path": str(path), "size_bytes": size, "size_mb": round(size / (1024 * 1024), 1), "source": spec["source"], "source_label": spec["source_label"], "description": spec["description"], "dependencies": spec["dependencies"], "downloadable": spec["source"] != "built-in"}
 
 
 def statuses() -> list[dict[str, Any]]:
@@ -66,19 +66,22 @@ def _set_job(job_id: str, **updates: Any) -> None:
         _JOBS[job_id].update(updates)
 
 
-def _download_hf(target: Path, repo: str) -> None:
+def _download_hf(target: Path, repo: str, job_id: str) -> None:
     if snapshot_download is None:
         raise RuntimeError("huggingface-hub is not installed in this build.")
     target.mkdir(parents=True, exist_ok=True)
+    _set_job(job_id, message=f"Fetching {repo}…", progress=None)
     snapshot_download(repo_id=repo, local_dir=str(target))
 
 
-def _download_timeradar(target: Path, url: str) -> None:
+def _download_timeradar(target: Path, url: str, job_id: str) -> None:
     temp_zip = ROOT / f"timeradar-{uuid.uuid4().hex}.zip"
     req = Request(url, headers={"User-Agent": "MAINTAIN-AI-Local-Intelligence"})
     try:
+        _set_job(job_id, message="Fetching TimeRadar archive…", progress=None)
         with urlopen(req, timeout=60) as response, open(temp_zip, "wb") as out:
             shutil.copyfileobj(response, out)
+        _set_job(job_id, message="Preparing TimeRadar files…", progress=None)
         with zipfile.ZipFile(temp_zip) as archive:
             prefix = "TimeRadar-main/TimeRadar/"
             if not any(n.startswith(prefix) for n in archive.namelist()):
@@ -99,16 +102,16 @@ def _run_download(job_id: str, name: str) -> None:
     spec = MODEL_SPECS[name]
     target = model_path(name)
     temp = target.with_name(target.name + ".partial")
-    _set_job(job_id, state="running", model=name, message="Downloading…", progress=None)
+    _set_job(job_id, state="running", model=name, message="Preparing download…", progress=None)
     try:
         if target.exists() and any(target.iterdir()):
             _set_job(job_id, state="done", model=name, message="Already installed", progress=100)
             return
         shutil.rmtree(temp, ignore_errors=True)
         if spec["source"] == "huggingface":
-            _download_hf(temp, spec["repo"])
+            _download_hf(temp, spec["repo"], job_id)
         elif spec["source"] == "github":
-            _download_timeradar(temp, spec["url"])
+            _download_timeradar(temp, spec["url"], job_id)
         else:
             raise RuntimeError("This model does not support downloading.")
         if target.exists():
