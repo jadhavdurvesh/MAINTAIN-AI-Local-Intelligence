@@ -1,14 +1,22 @@
+from pathlib import Path
+
 from PyInstaller.utils.hooks import collect_submodules
 
-# The spec file lives in packaging/, while the desktop entrypoint lives at
-# the repository root. PyInstaller resolves Analysis paths relative to the
-# spec file, so use the parent directory explicitly.
-APP_ROOT = ".."
+# Resolve paths from the spec file itself. GitHub Actions invokes PyInstaller
+# from the repository root, so a relative "../desktop.py" is otherwise
+# resolved against the wrong working directory on some PyInstaller versions.
+SPEC_DIR = Path(__file__).resolve().parent
+APP_ROOT = SPEC_DIR.parent
+ENTRYPOINT = APP_ROOT / "desktop.py"
+
 hidden = collect_submodules("app")
 
+if not ENTRYPOINT.is_file():
+    raise FileNotFoundError(f"Desktop entrypoint not found: {ENTRYPOINT}")
+
 a = Analysis(
-    ["../desktop.py"],
-    pathex=[APP_ROOT],
+    [str(ENTRYPOINT)],
+    pathex=[str(APP_ROOT)],
     binaries=[],
     datas=[],
     hiddenimports=hidden,
