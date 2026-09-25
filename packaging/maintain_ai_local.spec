@@ -2,10 +2,14 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
-# Resolve paths from the spec file itself. GitHub Actions invokes PyInstaller
-# from the repository root, so a relative "../desktop.py" is otherwise
-# resolved against the wrong working directory on some PyInstaller versions.
-SPEC_DIR = Path(__file__).resolve().parent
+# PyInstaller executes the spec file without defining __file__ in some
+# versions. The GitHub Actions build runs from the repository root, so keep
+# the fallback deterministic while still supporting direct local invocation.
+if "__file__" in globals():
+    SPEC_DIR = Path(__file__).resolve().parent
+else:
+    SPEC_DIR = Path.cwd() / "packaging"
+
 APP_ROOT = SPEC_DIR.parent
 ENTRYPOINT = APP_ROOT / "desktop.py"
 
