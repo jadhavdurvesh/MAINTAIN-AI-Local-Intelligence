@@ -6,7 +6,6 @@ from typing import Any
 
 import numpy as np
 
-
 _MODEL_CACHE: dict[str, Any] = {}
 
 
@@ -40,14 +39,7 @@ def timeradar_status() -> dict:
         deps = True
     except ImportError:
         deps = False
-    return {
-        "model": "TimeRadar",
-        "available": deps and path.exists(),
-        "dependencies_ready": deps,
-        "checkpoint": str(path),
-        "mode": "zero_shot_anomaly",
-        "sequence_length": 100,
-    }
+    return {"model": "TimeRadar", "available": deps and path.exists(), "dependencies_ready": deps, "checkpoint": str(path), "mode": "zero_shot_anomaly", "sequence_length": 100}
 
 
 def _load_timeradar() -> Any:
@@ -56,7 +48,6 @@ def _load_timeradar() -> Any:
         return _MODEL_CACHE[key]
     import torch
     from transformers import AutoModel
-
     path = _configured_path("MAINTAIN_TIMERADAR_MODEL", "TimeRadar")
     if not path.exists():
         raise FileNotFoundError(f"TimeRadar checkpoint not found: {path}")
@@ -71,36 +62,21 @@ def _load_timeradar() -> Any:
 def timeradar(values: list[float]) -> dict:
     status = timeradar_status()
     if not status["available"]:
-        return {**status, "reason": "Install torch/transformers and place the official TimeRadar checkpoint at the configured local path."}
+        return {**status, "reason": "Install torch/transformers and download TimeRadar from Model Manager."}
     if len(values) < 2:
         return {**status, "reason": "At least 2 samples are required."}
-
     try:
         import torch
-
         x = np.asarray(values, dtype=np.float32)
         original_length = len(x)
-        if len(x) >= 100:
-            window = x[-100:]
-        else:
-            window = np.pad(x, (100 - len(x), 0), mode="edge")
-
+        window = x[-100:] if len(x) >= 100 else np.pad(x, (100 - len(x), 0), mode="edge")
         tensor = torch.from_numpy(window).reshape(1, 100, 1)
         model = _load_timeradar()
         device = next(model.parameters()).device
         with torch.no_grad():
             outputs = model(input_values=tensor.to(device))
-
         scores = outputs.anomaly_scores.detach().float().cpu().numpy().reshape(-1)
-        score = float(scores[-1])
-        return {
-            **status,
-            "ready": True,
-            "n_points": original_length,
-            "window_length": 100,
-            "latest_anomaly_score": score,
-            "anomaly_scores": scores.tolist(),
-        }
+        return {**status, "ready": True, "n_points": original_length, "window_length": 100, "latest_anomaly_score": float(scores[-1]), "anomaly_scores": scores.tolist()}
     except Exception as exc:
         return {**status, "available": False, "reason": f"TimeRadar inference failed: {exc}"}
 
@@ -114,15 +90,12 @@ def chronos2(values: list[float], horizon: int) -> dict:
     if len(values) < 32:
         return {"available": False, "model": "Chronos-2", "reason": "At least 32 samples are required."}
     try:
-        model_id = os.getenv("MAINTAIN_CHRONOS_MODEL", "amazon/chronos-2")
+        local_path = _configured_path("MAINTAIN_CHRONOS_MODEL_PATH", "Chronos-2")
+        model_id = str(local_path) if local_path.exists() else os.getenv("MAINTAIN_CHRONOS_MODEL", "amazon/chronos-2")
         cache_key = f"chronos2:{model_id}:{'cuda' if torch.cuda.is_available() else 'cpu'}"
         if cache_key not in _MODEL_CACHE:
-            _MODEL_CACHE[cache_key] = Chronos2Pipeline.from_pretrained(
-                model_id,
-                device_map="cuda" if torch.cuda.is_available() else "cpu",
-            )
-        pipe = _MODEL_CACHE[cache_key]
-        pred = pipe.predict(torch.tensor(values[-512:], dtype=torch.float32), prediction_length=horizon)
+            _MODEL_CACHE[cache_key] = Chronos2Pipeline.from_pretrained(model_id, device_map="cuda" if torch.cuda.is_available() else "cpu")
+        pred = _MODEL_CACHE[cache_key].predict(torch.tensor(values[-512:], dtype=torch.float32), prediction_length=horizon)
         arr = pred.detach().float().cpu().numpy()
         return {"available": True, "model": "Chronos-2", "forecast": arr.reshape(-1).tolist(), "horizon": horizon}
     except Exception as exc:
@@ -136,25 +109,16 @@ def timer_status() -> dict:
         deps = True
     except ImportError:
         deps = False
-    model_id = os.getenv("MAINTAIN_TIMER_MODEL", "thuml/timer-base-84m")
-    local_path = os.getenv("MAINTAIN_TIMER_MODEL_PATH", "")
-    return {
-        "model": "Timer",
-        "available": deps,
-        "dependencies_ready": deps,
-        "model_id": model_id,
-        "local_checkpoint": local_path or None,
-        "context_limit": 2880,
-        "mode": "zero_shot_forecast",
-    }
+    local_path = _configured_path("MAINTAIN_TIMER_MODEL_PATH", "Timer")
+    model_id = str(local_path) if local_path.exists() else os.getenv("MAINTAIN_TIMER_MODEL", "thuml/timer-base-84m")
+    return {"model": "Timer", "available": deps, "dependencies_ready": deps, "model_id": model_id, "local_checkpoint": str(local_path) if local_path.exists() else None, "context_limit": 2880, "mode": "zero_shot_forecast"}
 
 
 def _load_timer() -> Any:
     import torch
     from transformers import AutoModelForCausalLM
-
-    local_path = os.getenv("MAINTAIN_TIMER_MODEL_PATH")
-    model_id = local_path or os.getenv("MAINTAIN_TIMER_MODEL", "thuml/timer-base-84m")
+    local_path = _configured_path("MAINTAIN_TIMER_MODEL_PATH", "Timer")
+    model_id = str(local_path) if local_path.exists() else os.getenv("MAINTAIN_TIMER_MODEL", "thuml/timer-base-84m")
     key = f"timer:{model_id}:{'cuda' if torch.cuda.is_available() else 'cpu'}"
     if key in _MODEL_CACHE:
         return _MODEL_CACHE[key]
@@ -172,10 +136,8 @@ def timer(values: list[float], horizon: int) -> dict:
         return {**status, "reason": "Install torch and transformers to enable Timer inference."}
     if len(values) < 16:
         return {**status, "available": False, "reason": "At least 16 samples are required."}
-
     try:
         import torch
-
         x = torch.tensor(values[-2880:], dtype=torch.float32).reshape(1, -1)
         mean = x.mean(dim=-1, keepdim=True)
         std = x.std(dim=-1, keepdim=True).clamp_min(1e-6)
@@ -186,12 +148,6 @@ def timer(values: list[float], horizon: int) -> dict:
             generated = model.generate(normed.to(device), max_new_tokens=horizon)
         forecast = generated[:, -horizon:].detach().float().cpu()
         forecast = (forecast * std.cpu()) + mean.cpu()
-        return {
-            **status,
-            "ready": True,
-            "horizon": horizon,
-            "context_length": int(x.shape[-1]),
-            "forecast": forecast.reshape(-1).tolist(),
-        }
+        return {**status, "ready": True, "horizon": horizon, "context_length": int(x.shape[-1]), "forecast": forecast.reshape(-1).tolist()}
     except Exception as exc:
         return {**status, "available": False, "reason": f"Timer inference failed: {exc}"}
